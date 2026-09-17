@@ -1,5 +1,5 @@
 import type { Habit, HabitCheckIn, HabitStatus } from "../types/habit";
-import { dateFromKey, toDateKey, STREAK_THRESHOLD } from "./date";
+import { addDays, dateFromKey, toDateKey, STREAK_THRESHOLD } from "./date";
 
 export interface DayHabit extends Habit { status?: HabitStatus; }
 export interface DailyConsistency { scheduled: DayHabit[]; completed: number; resting: number; missed: number; score: number | null; isPlannedRest: boolean; }
@@ -7,6 +7,15 @@ export interface DailyConsistency { scheduled: DayHabit[]; completed: number; re
 export function getScheduledHabits(dateKey: string, habits: Habit[]): Habit[] {
   const date = dateFromKey(dateKey);
   return habits.filter((habit) => habit.createdAt <= dateKey && habit.weekdays.includes(date.getDay()));
+}
+
+export function getNextScheduledDate(habit: Pick<Habit, "weekdays">, from = new Date()): string {
+  const start = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  for (let offset = 1; offset <= 7; offset += 1) {
+    const candidate = addDays(start, offset);
+    if (habit.weekdays.includes(candidate.getDay())) return toDateKey(candidate);
+  }
+  return toDateKey(start);
 }
 
 export function getDailyConsistency(dateKey: string, habits: Habit[], checkIns: HabitCheckIn[]): DailyConsistency {

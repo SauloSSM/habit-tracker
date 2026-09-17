@@ -1,0 +1,8 @@
+import type { Habit, HabitCheckIn } from "../types/habit";
+const STORAGE_KEY = "consistency-dashboard-v1";
+interface StoredData { habits: Habit[]; checkIns: HabitCheckIn[]; }
+const emptyData: StoredData = { habits: [], checkIns: [] };
+function isHabit(value: unknown): value is Habit { if (!value || typeof value !== "object") return false; const habit = value as Record<string, unknown>; return typeof habit.id === "string" && typeof habit.name === "string" && typeof habit.description === "string" && typeof habit.category === "string" && typeof habit.createdAt === "string" && Array.isArray(habit.weekdays) && habit.weekdays.every((day) => typeof day === "number"); }
+function isCheckIn(value: unknown): value is HabitCheckIn { if (!value || typeof value !== "object") return false; const checkIn = value as Record<string, unknown>; return typeof checkIn.habitId === "string" && typeof checkIn.date === "string" && (checkIn.status === "DONE" || checkIn.status === "REST" || checkIn.status === "MISSED"); }
+export function loadData(): StoredData { try { const raw = localStorage.getItem(STORAGE_KEY); if (!raw) return emptyData; const parsed: unknown = JSON.parse(raw); if (!parsed || typeof parsed !== "object") return emptyData; const data = parsed as Record<string, unknown>; return { habits: Array.isArray(data.habits) ? data.habits.filter(isHabit) : [], checkIns: Array.isArray(data.checkIns) ? data.checkIns.filter(isCheckIn) : [] }; } catch { return emptyData; } }
+export function saveData(data: StoredData): void { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch { /* storage can be unavailable */ } }

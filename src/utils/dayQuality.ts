@@ -1,0 +1,2 @@
+export type DayQuality = "MISSED" | "SHOWED_UP" | "GOOD" | "STRONG" | "PERFECT" | "PLANNED_REST";
+export function getDayQuality(score: number | null, isPlannedRest: boolean): DayQuality | null { if (isPlannedRest) return "PLANNED_REST"; if (score === null) return null; if (score === 0) return "MISSED"; if (score < 60) return "SHOWED_UP"; if (score < 80) return "GOOD"; if (score < 100) return "STRONG"; return "PERFECT"; }

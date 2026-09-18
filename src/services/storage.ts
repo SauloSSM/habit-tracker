@@ -1,12 +1,30 @@
 import type { DayNote, Habit, HabitCheckIn, HabitCategory, ScheduleType } from "../types/habit";
+import { validateFocusThresholds } from "../utils/focus";
 const STORAGE_KEY = "consistency-dashboard-v1";
-const VERSION = 2;
+const VERSION = 3;
 export interface StoredData { version: number; habits: Habit[]; checkIns: HabitCheckIn[]; notes: DayNote[]; }
 const emptyData: StoredData = { version: VERSION, habits: [], checkIns: [], notes: [] };
 const categories: HabitCategory[] = ["Study", "Health", "Personal", "Career", "Other"];
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object"; }
 function isCheckIn(value: unknown): value is HabitCheckIn { return isRecord(value) && typeof value.habitId === "string" && typeof value.date === "string" && (value.status === "DONE" || value.status === "REST" || value.status === "MISSED"); }
 function isNote(value: unknown): value is DayNote { return isRecord(value) && typeof value.date === "string" && typeof value.text === "string"; }
-function migrateHabit(value: unknown): Habit | null { if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string" || typeof value.description !== "string" || typeof value.createdAt !== "string" || !categories.includes(value.category as HabitCategory) || !Array.isArray(value.weekdays) || !value.weekdays.every((day) => typeof day === "number")) return null; const scheduleType: ScheduleType = value.scheduleType === "WEEKLY_TARGET" ? "WEEKLY_TARGET" : "FIXED_DAYS"; const target = typeof value.weeklyTarget === "number" && Number.isInteger(value.weeklyTarget) && value.weeklyTarget >= 1 && value.weeklyTarget <= 7 ? value.weeklyTarget : undefined; return { id: value.id, name: value.name, description: value.description, category: value.category as HabitCategory, weekdays: value.weekdays as number[], scheduleType, weeklyTarget: scheduleType === "WEEKLY_TARGET" ? target ?? 3 : undefined, createdAt: value.createdAt, archived: value.archived === true, archivedAt: typeof value.archivedAt === "string" ? value.archivedAt : undefined }; }
+function migrateHabit(value: unknown): Habit | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string" || typeof value.description !== "string" || typeof value.createdAt !== "string" || !categories.includes(value.category as HabitCategory) || !Array.isArray(value.weekdays) || !value.weekdays.every((day) => typeof day === "number")) return null;
+  const scheduleType: ScheduleType = value.scheduleType === "WEEKLY_TARGET" ? "WEEKLY_TARGET" : "FIXED_DAYS";
+  const weeklyTarget = typeof value.weeklyTarget === "number" && Number.isInteger(value.weeklyTarget) && value.weeklyTarget >= 1 && value.weeklyTarget <= 7 ? value.weeklyTarget : undefined;
+  const base = { id: value.id, name: value.name, description: value.description, category: value.category as HabitCategory, weekdays: value.weekdays as number[], scheduleType, weeklyTarget: scheduleType === "WEEKLY_TARGET" ? weeklyTarget ?? 3 : undefined, createdAt: value.createdAt, archived: value.archived === true, archivedAt: typeof value.archivedAt === "string" ? value.archivedAt : undefined };
+
+  if (value.trackingType === "FOCUS" && typeof value.minimumMinutes === "number" && typeof value.targetMinutes === "number" && (value.stretchMinutes === undefined || typeof value.stretchMinutes === "number")) {
+    const thresholds = { minimumMinutes: value.minimumMinutes, targetMinutes: value.targetMinutes, stretchMinutes: value.stretchMinutes };
+    try {
+      validateFocusThresholds(thresholds);
+      return { ...base, trackingType: "FOCUS", ...thresholds };
+    } catch {
+      return null;
+    }
+  }
+
+  return { ...base, trackingType: "CHECK_IN" };
+}
 export function loadData(): StoredData { try { const raw = localStorage.getItem(STORAGE_KEY); if (!raw) return emptyData; const parsed: unknown = JSON.parse(raw); if (!isRecord(parsed)) return emptyData; return { version: VERSION, habits: Array.isArray(parsed.habits) ? parsed.habits.map(migrateHabit).filter((habit): habit is Habit => habit !== null) : [], checkIns: Array.isArray(parsed.checkIns) ? parsed.checkIns.filter(isCheckIn) : [], notes: Array.isArray(parsed.notes) ? parsed.notes.filter(isNote) : [] }; } catch { return emptyData; } }
 export function saveData(data: StoredData): void { try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...data, version: VERSION })); } catch { /* storage can be unavailable */ } }

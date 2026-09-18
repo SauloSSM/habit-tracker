@@ -166,7 +166,19 @@ export function parseActiveFocusSession(value: unknown): ActiveFocusSession | nu
     || !isNonNegativeFiniteNumber(value.accumulatedPausedSeconds)
   ) return null;
 
-  if (value.state === "PAUSED" && !isTimestamp(value.pausedAt)) return null;
+  if (value.state === "PAUSED") {
+    if (!isTimestamp(value.pausedAt)) return null;
+
+    return {
+      id: value.id,
+      habitId: value.habitId,
+      date: value.date,
+      startedAt: value.startedAt,
+      state: value.state,
+      pausedAt: value.pausedAt,
+      accumulatedPausedSeconds: value.accumulatedPausedSeconds,
+    };
+  }
 
   return {
     id: value.id,
@@ -174,7 +186,6 @@ export function parseActiveFocusSession(value: unknown): ActiveFocusSession | nu
     date: value.date,
     startedAt: value.startedAt,
     state: value.state,
-    ...(value.state === "PAUSED" ? { pausedAt: value.pausedAt as string } : {}),
     accumulatedPausedSeconds: value.accumulatedPausedSeconds,
   };
 }

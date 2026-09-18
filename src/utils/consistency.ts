@@ -6,7 +6,7 @@ export interface DailyConsistency { scheduled: DayHabit[]; completed: number; re
 
 export function getScheduledHabits(dateKey: string, habits: Habit[]): Habit[] {
   const date = dateFromKey(dateKey);
-  return habits.filter((habit) => isHabitRelevantOn(dateKey, habit) && (habit.scheduleType === "WEEKLY_TARGET" || habit.weekdays.includes(date.getDay())));
+  return habits.filter((habit) => habit.scheduleType === "FIXED_DAYS" && isHabitRelevantOn(dateKey, habit) && habit.weekdays.includes(date.getDay()));
 }
 
 export function isHabitRelevantOn(dateKey: string, habit: Habit): boolean { return habit.createdAt <= dateKey && (!habit.archived || !habit.archivedAt || dateKey <= habit.archivedAt); }
@@ -25,13 +25,11 @@ export function getNextScheduledDate(habit: Pick<Habit, "weekdays" | "scheduleTy
 
 export function getDailyConsistency(dateKey: string, habits: Habit[], checkIns: HabitCheckIn[]): DailyConsistency {
   const statusByHabit = new Map(checkIns.filter((item) => item.date === dateKey).map((item) => [item.habitId, item.status]));
-  const scheduled = getScheduledHabits(dateKey, habits).map((habit) => ({ ...habit, status: statusByHabit.get(habit.id), weeklyProgress: habit.scheduleType === "WEEKLY_TARGET" ? getWeeklyProgress(habit, dateKey, checkIns) : undefined }));
+  const scheduled = getScheduledHabits(dateKey, habits).map((habit) => ({ ...habit, status: statusByHabit.get(habit.id) }));
   let completed = 0; let resting = 0; let total = 0;
-  const isWeekEnd = dateFromKey(dateKey).getDay() === 6;
   for (const habit of scheduled) {
-    if (habit.scheduleType === "FIXED_DAYS") { if (habit.status === "REST") resting += 1; else { total += 1; if (habit.status === "DONE") completed += 1; } }
-    else if (isWeekEnd) { const target = habit.weeklyTarget ?? 3; total += target; completed += Math.min(habit.weeklyProgress ?? 0, target); }
-    else if (habit.status === "DONE") { total += 1; completed += 1; }
+    if (habit.status === "REST") resting += 1;
+    else { total += 1; if (habit.status === "DONE") completed += 1; }
   }
   return { scheduled, completed, resting, missed: Math.max(0, total - completed), score: total === 0 ? null : Math.round((completed / total) * 100), isPlannedRest: scheduled.length > 0 && total === 0 && resting > 0 };
 }
@@ -45,14 +43,15 @@ export function getConsistencyLevel(score: number | null): number {
 }
 
 export function getStreaks(habits: Habit[], checkIns: HabitCheckIn[], today = new Date()): { current: number; longest: number } {
-  const firstDate = habits.reduce<string | null>((earliest, habit) => earliest === null || habit.createdAt < earliest ? habit.createdAt : earliest, null);
+  const fixedHabits = habits.filter((habit) => habit.scheduleType === "FIXED_DAYS");
+  const firstDate = fixedHabits.reduce<string | null>((earliest, habit) => earliest === null || habit.createdAt < earliest ? habit.createdAt : earliest, null);
   if (!firstDate) return { current: 0, longest: 0 };
   let current = 0; let longest = 0; let running = 0; let currentOpen = true;
   const cursor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const todayKey = toDateKey(cursor);
   while (toDateKey(cursor) >= firstDate) {
     const dateKey = toDateKey(cursor);
-    const day = getDailyConsistency(dateKey, habits, checkIns);
+    const day = getDailyConsistency(dateKey, fixedHabits, checkIns);
     if (day.scheduled.length === 0 || day.isPlannedRest || day.score === null) { cursor.setDate(cursor.getDate() - 1); continue; }
     if (day.score !== null && day.score >= STREAK_THRESHOLD) { running += 1; if (currentOpen) current += 1; longest = Math.max(longest, running); }
     // Today is still in progress, so only a completed valid day may extend the streak.

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActiveFocusSession, FocusSession, Habit } from "../types/habit";
-import { loadData, saveData, type StoredData } from "./storage";
+import type { ActiveFocusSession, CheckInHabit, FocusSession, Habit } from "../types/habit";
+import { loadData, migrateStoredData, saveData, type StoredData } from "./storage";
 
 const storageKey = "consistency-dashboard-v1";
 let storedValues: Map<string, string>;
@@ -17,6 +17,18 @@ const habit: Habit = {
   trackingType: "FOCUS",
   minimumMinutes: 15,
   targetMinutes: 45,
+};
+
+const checkInHabit: CheckInHabit = {
+  id: "check-in-1",
+  name: "Read",
+  description: "",
+  category: "Personal",
+  weekdays: [1],
+  scheduleType: "FIXED_DAYS",
+  createdAt: "2024-01-01",
+  archived: false,
+  trackingType: "CHECK_IN",
 };
 
 const focusSession: FocusSession = {
@@ -74,9 +86,10 @@ describe("storage migration", () => {
   it("migrates V3 data to V4 with empty focus state without losing existing data", () => {
     writeRaw({
       version: 3,
+      habits: [checkInHabit],
       focusSessions: undefined,
       activeFocusSession: undefined,
-      checkIns: [{ habitId: habit.id, date: "2024-01-02", status: "DONE" }],
+      checkIns: [{ habitId: checkInHabit.id, date: "2024-01-02", status: "DONE" }],
       notes: [{ date: "2024-01-02", text: "A note" }],
     });
 
@@ -84,13 +97,13 @@ describe("storage migration", () => {
 
     expect(loaded.version).toBe(4);
     expect(loaded.habits).toHaveLength(1);
-    expect(loaded.checkIns).toEqual([{ habitId: habit.id, date: "2024-01-02", status: "DONE" }]);
+    expect(loaded.checkIns).toEqual([{ habitId: checkInHabit.id, date: "2024-01-02", status: "DONE" }]);
     expect(loaded.notes).toEqual([{ date: "2024-01-02", text: "A note" }]);
     expect(loaded.focusSessions).toEqual([]);
     expect(loaded.activeFocusSession).toBeNull();
   });
 
-  it("defaults an existing V1 habit to CHECK_IN", () => {
+  it("defaults a V2 habit to CHECK_IN", () => {
     writeRaw({
       version: 2,
       habits: [{
@@ -108,6 +121,145 @@ describe("storage migration", () => {
     });
 
     expect(loadData().habits[0]?.trackingType).toBe("CHECK_IN");
+  });
+
+  it("defaults a V3 habit with omitted trackingType to CHECK_IN", () => {
+    const { trackingType: _trackingType, ...legacyHabit } = checkInHabit;
+    writeRaw({ version: 3, habits: [legacyHabit], focusSessions: undefined, activeFocusSession: undefined });
+
+    expect(loadData().habits[0]?.trackingType).toBe("CHECK_IN");
+  });
+
+  it("migrates an unversioned V1 payload with legacy schedule and tracking defaults", () => {
+    const result = migrateStoredData({
+      habits: [{
+        id: "legacy-1",
+        name: "Walk",
+        description: "",
+        category: "Health",
+        weekdays: [1, 3, 5],
+        createdAt: "2024-01-01",
+      }],
+      checkIns: [{ habitId: "legacy-1", date: "2024-01-03", status: "DONE" }],
+    });
+
+    expect(result.kind).toBe("READY");
+    if (result.kind !== "READY") throw new Error("Expected supported legacy data");
+    expect(result.data).toMatchObject({ version: 4 });
+    expect(result.data.habits[0]).toMatchObject({ scheduleType: "FIXED_DAYS", trackingType: "CHECK_IN" });
+    expect(result.data.checkIns).toHaveLength(1);
+  });
+
+  it("normalizes current V4 data without changing its domain meaning", () => {
+    const result = migrateStoredData(storedData({ focusSessions: [focusSession], activeFocusSession: runningSession }));
+
+    expect(result).toEqual({
+      kind: "READY",
+      data: storedData({ focusSessions: [focusSession], activeFocusSession: runningSession }),
+    });
+  });
+
+  it("treats a malformed explicit version as invalid data", () => {
+    const result = migrateStoredData({ version: "4", habits: [habit] });
+
+    expect(result).toEqual({ kind: "READY", data: storedData({ habits: [] }) });
+  });
+
+  it("identifies an unsupported future schema without interpreting it", () => {
+    expect(migrateStoredData({ version: 5, habits: [habit], futureField: "preserve me" })).toEqual({
+      kind: "UNSUPPORTED_FUTURE_VERSION",
+      version: 5,
+    });
+  });
+
+  it("does not overwrite an unsupported future payload during normal persistence", () => {
+    const futurePayload = JSON.stringify({ version: 5, habits: [habit], futureField: "preserve me" });
+    storedValues.set(storageKey, futurePayload);
+
+    expect(loadData()).toEqual(storedData({ habits: [] }));
+    saveData(storedData({ habits: [] }));
+
+    expect(storedValues.get(storageKey)).toBe(futurePayload);
+  });
+});
+
+describe("storage validation and normalization", () => {
+  it.each([
+    ["empty id", { ...checkInHabit, id: "" }],
+    ["unknown category", { ...checkInHabit, category: "Unknown" }],
+    ["unknown schedule", { ...checkInHabit, scheduleType: "DAILY" }],
+    ["unknown tracking type", { ...checkInHabit, trackingType: "TIMER" }],
+    ["out-of-range weekday", { ...checkInHabit, weekdays: [7] }],
+    ["fractional weekday", { ...checkInHabit, weekdays: [1.5] }],
+    ["duplicate weekday", { ...checkInHabit, weekdays: [1, 1] }],
+    ["invalid creation date", { ...checkInHabit, createdAt: "2024-02-30" }],
+    ["invalid archive date", { ...checkInHabit, archived: true, archivedAt: "not-a-date" }],
+    ["invalid Focus thresholds", { ...habit, minimumMinutes: 0 }],
+  ])("discards a habit with %s", (_label, invalidHabit) => {
+    writeRaw({ habits: [invalidHabit] });
+
+    expect(loadData().habits).toEqual([]);
+  });
+
+  it("requires an explicit tracking type in the current schema", () => {
+    const { trackingType: _trackingType, ...withoutTrackingType } = checkInHabit;
+    writeRaw({ habits: [withoutTrackingType] });
+
+    expect(loadData().habits).toEqual([]);
+  });
+
+  it("accepts FOCUS with WEEKLY_TARGET without deriving weekly progress", () => {
+    writeRaw({ habits: [{ ...habit, scheduleType: "WEEKLY_TARGET", weekdays: [], weeklyTarget: 3 }] });
+
+    expect(loadData().habits[0]).toMatchObject({ trackingType: "FOCUS", scheduleType: "WEEKLY_TARGET", weeklyTarget: 3 });
+  });
+
+  it("discards invalid and orphaned check-ins", () => {
+    writeRaw({
+      habits: [checkInHabit],
+      checkIns: [
+        { habitId: checkInHabit.id, date: "not-a-date", status: "DONE" },
+        { habitId: "missing", date: "2024-01-02", status: "DONE" },
+        { habitId: checkInHabit.id, date: "2024-01-02", status: "SKIPPED" },
+      ],
+    });
+
+    expect(loadData().checkIns).toEqual([]);
+  });
+
+  it("keeps only REST check-ins for Focus habits", () => {
+    writeRaw({
+      checkIns: [
+        { habitId: habit.id, date: "2024-01-01", status: "DONE" },
+        { habitId: habit.id, date: "2024-01-02", status: "MISSED" },
+        { habitId: habit.id, date: "2024-01-03", status: "REST" },
+      ],
+    });
+
+    expect(loadData().checkIns).toEqual([{ habitId: habit.id, date: "2024-01-03", status: "REST" }]);
+  });
+
+  it("deduplicates check-ins and notes with the last valid occurrence winning", () => {
+    writeRaw({
+      habits: [checkInHabit],
+      checkIns: [
+        { habitId: checkInHabit.id, date: "2024-01-02", status: "DONE" },
+        { habitId: checkInHabit.id, date: "2024-01-02", status: "REST" },
+      ],
+      notes: [
+        { date: "2024-01-02", text: "First" },
+        { date: "2024-01-02", text: "Last" },
+      ],
+    });
+
+    expect(loadData().checkIns).toEqual([{ habitId: checkInHabit.id, date: "2024-01-02", status: "REST" }]);
+    expect(loadData().notes).toEqual([{ date: "2024-01-02", text: "Last" }]);
+  });
+
+  it("discards notes with invalid dates", () => {
+    writeRaw({ notes: [{ date: "2024-13-01", text: "Invalid" }] });
+
+    expect(loadData().notes).toEqual([]);
   });
 });
 
@@ -159,6 +311,12 @@ describe("focus session storage", () => {
     expect(loadData().focusSessions).toEqual([]);
   });
 
+  it("discards a session attached to a CHECK_IN habit", () => {
+    writeRaw({ habits: [checkInHabit], focusSessions: [{ ...focusSession, habitId: checkInHabit.id }] });
+
+    expect(loadData().focusSessions).toEqual([]);
+  });
+
   it("retains historical sessions for an archived habit", () => {
     writeRaw({ habits: [{ ...habit, archived: true, archivedAt: "2024-01-03" }], focusSessions: [focusSession] });
 
@@ -199,6 +357,12 @@ describe("active focus session storage", () => {
 
   it("loads an orphaned active session as null", () => {
     writeRaw({ activeFocusSession: { ...runningSession, habitId: "deleted-habit" } });
+
+    expect(loadData().activeFocusSession).toBeNull();
+  });
+
+  it("loads an active session for a CHECK_IN habit as null", () => {
+    writeRaw({ habits: [checkInHabit], activeFocusSession: { ...runningSession, habitId: checkInHabit.id } });
 
     expect(loadData().activeFocusSession).toBeNull();
   });

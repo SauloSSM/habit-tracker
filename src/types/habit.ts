@@ -5,7 +5,6 @@ export type HabitStatus = "DONE" | "REST" | "MISSED";
 export type ScheduleType = "FIXED_DAYS" | "WEEKLY_TARGET";
 export type HabitTrackingType = "CHECK_IN" | "FOCUS";
 export type FocusProgressLevel = "NONE" | "STARTED" | "SHOWED_UP" | "TARGET_REACHED" | "STRETCH_REACHED";
-export type FocusTimerState = "RUNNING" | "PAUSED";
 
 interface HabitBase {
   id: string;
@@ -26,28 +25,23 @@ export interface FocusThresholds {
   stretchMinutes?: number;
 }
 
-export interface Habit extends HabitBase {
-  // Missing trackingType is supported for V1 data and means CHECK_IN.
-  trackingType?: HabitTrackingType;
-  minimumMinutes?: number;
-  targetMinutes?: number;
-  stretchMinutes?: number;
-}
-
-export interface CheckInHabit extends Habit {
-  // Missing trackingType is supported for V1 data and means CHECK_IN.
-  trackingType?: "CHECK_IN";
+export interface CheckInHabit extends HabitBase {
+  trackingType: "CHECK_IN";
   minimumMinutes?: never;
   targetMinutes?: never;
   stretchMinutes?: never;
 }
 
-export interface FocusHabit extends Habit {
+export interface FocusHabit extends HabitBase {
   trackingType: "FOCUS";
   minimumMinutes: number;
   targetMinutes: number;
   stretchMinutes?: number;
 }
+
+// All four tracking/schedule combinations are supported. For FOCUS + WEEKLY_TARGET,
+// a future weekly occurrence is one calendar day that reaches minimumMinutes.
+export type Habit = CheckInHabit | FocusHabit;
 
 export interface HabitCheckIn {
   habitId: string;
@@ -65,15 +59,25 @@ export interface FocusSession {
   note?: string;
 }
 
-export interface ActiveFocusSession {
+interface ActiveFocusSessionBase {
   id: string;
   habitId: string;
   date: string;
   startedAt: string;
-  state: FocusTimerState;
-  pausedAt?: string;
   accumulatedPausedSeconds: number;
 }
+
+export interface RunningFocusSession extends ActiveFocusSessionBase {
+  state: "RUNNING";
+  pausedAt?: never;
+}
+
+export interface PausedFocusSession extends ActiveFocusSessionBase {
+  state: "PAUSED";
+  pausedAt: string;
+}
+
+export type ActiveFocusSession = RunningFocusSession | PausedFocusSession;
 
 export interface DayNote {
   date: string;
@@ -83,7 +87,7 @@ export interface DayNote {
 type HabitInputBase = Pick<HabitBase, "name" | "description" | "category" | "weekdays" | "scheduleType" | "weeklyTarget">;
 
 export interface CheckInHabitInput extends HabitInputBase {
-  trackingType?: "CHECK_IN";
+  trackingType: "CHECK_IN";
   minimumMinutes?: never;
   targetMinutes?: never;
   stretchMinutes?: never;

@@ -21,7 +21,10 @@ export function HabitForm({ habit, onSave, onCancel }: HabitFormProps) {
   function submit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     if (!canSubmit) return;
-    onSave({ name: name.trim(), description: description.trim(), category, weekdays: selectedDays, scheduleType, weeklyTarget: scheduleType === "WEEKLY_TARGET" ? weeklyTarget : undefined });
+    const sharedInput = { name: name.trim(), description: description.trim(), category, weekdays: selectedDays, scheduleType, weeklyTarget: scheduleType === "WEEKLY_TARGET" ? weeklyTarget : undefined };
+    onSave(habit?.trackingType === "FOCUS"
+      ? { ...sharedInput, trackingType: "FOCUS", minimumMinutes: habit.minimumMinutes, targetMinutes: habit.targetMinutes, stretchMinutes: habit.stretchMinutes }
+      : { ...sharedInput, trackingType: "CHECK_IN" });
   }
 
   function toggleDay(day: number): void {
